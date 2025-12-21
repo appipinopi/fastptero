@@ -1,0 +1,37 @@
+#!/bin/bash
+# fastptero.se — Ubuntu 24.04 ONLY
+set -euo pipefail
+[[ $(grep "^VERSION_ID=" /etc/os-release | cut -d= -f2 | tr -d '"') != "24.04" ]] && { echo "❌ 24.04 only"; exit 1; }
+log(){ echo "[$(printf "%02ds" $SECONDS)] $1"; } fail(){ echo "[$(printf "%02ds" $SECONDS)] ❌ $1"; exit 1; } quiet(){ "$@" >/dev/null 2>&1; }
+
+log "🚀 24.04 mode"
+read -rp "[?] Mode [i/d]: " M; [[ "$M" != "i" && "$M" != "d" ]] && fail "i/d"
+read -rp "[?] Fresh? (y/N): " F; [[ "$F" != "y" ]] && fail "y only"
+
+[[ "$M" == "d" ]] && { systemctl stop wings pterodactyl-queue 2>/dev/null; apt remove -y nginx php* mariadb-server 2>/dev/null; rm -rf /etc/pterodactyl /var/lib/pterodactyl /var/www/pterodactyl; log "✔"; exit 0; }
+
+read -rp "[?] Domain: " D; [[ -z "$D" ]] && fail "domain"
+PANEL="panel.$D"; NODE="node.$D"
+read -rp "[?] Email [admin@$D]: " E; E="${E:-admin@$D}"
+
+P=$(tr -dc A-HJ-NP-Za-km-z2-9 </dev/urandom|head -c16)
+quiet systemctl stop systemd-resolved; echo "nameserver 8.8.8.8" > /etc/resolv.conf
+quiet apt update -y; quiet apt install -y curl ufw
+quiet ufw --force enable; quiet ufw allow 22,80,443,2022,8080,3306/tcp
+
+log "⏳ Panel..."
+quiet curl -sSL https://get.pterodactyl.io/panel/install.sh | bash -s -- \
+  --email "$E" --name admin --password "$P" --first-name admin --last-name admin \
+  --domain "$PANEL" --lets-encrypt --agree-lets-encrypt "$E" --skip-interactive
+
+log "⏳ Wings..."
+quiet curl -sSL https://get.pterodactyl.io/wings/install.sh | bash -s -- --panel-url "https://$PANEL" --auto
+
+U=$(mysql -sN -e "SELECT uuid FROM panel.users WHERE email='$E';" panel 2>/dev/null || echo "N/A")
+L=$(hostname -I|awk '{print $1}'); G=$(curl -s4m3 ifconfig.me 2>/dev/null||echo "N/A")
+
+echo; echo "---admin---"; echo "UUID: $U"; echo "username: admin"; echo "F/L: admin admin"; echo "password: $P"
+echo "--------------"; echo "---URL---"; echo "local: http://$L"; echo "global: http://$G"; echo "domain: https://$PANEL"; echo "--------------"
+
+read -rp "[?] Auto-start? (y/N): " A; [[ "$A" == "y" ]] && systemctl enable wings pterodactyl-queue
+log "🎉 ($SECONDS s)"
